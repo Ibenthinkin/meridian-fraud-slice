@@ -39,8 +39,13 @@ export function deriveSignals(
     (t) => now - t <= HOUR
   ).length;
 
+  // Money going to a payee with no history (or to no named payee) is treated as
+  // going to one added just now. Left as null, the age rules would skip it and
+  // an unknown payee would look safer than one added yesterday.
+  const movesMoney = req.eventType === "withdrawal" || req.eventType === "transfer";
   const payeeAddedAt = req.payeeId ? features.payeeAddedAt[req.payeeId] : undefined;
-  const payeeAgeDays = payeeAddedAt === undefined ? null : (now - payeeAddedAt) / DAY;
+  const payeeAgeDays =
+    payeeAddedAt !== undefined ? (now - payeeAddedAt) / DAY : movesMoney ? 0 : null;
 
   const contactChangedDays =
     features.contactChangedAt === undefined ? null : (now - features.contactChangedAt) / DAY;
@@ -56,7 +61,9 @@ export function deriveSignals(
   return {
     eventType: req.eventType,
     amountCents,
-    newDevice: deviceKnown === false,
+    // A request that doesn't say which device it came from gets the same
+    // scrutiny as one from a device we've never seen.
+    newDevice: deviceKnown !== true,
     deviceKnown,
     failedLoginsLastHour,
     payeeAgeDays,

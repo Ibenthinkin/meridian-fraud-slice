@@ -92,6 +92,29 @@ describe("signals", () => {
     expect(s.contactChangedDays).toBeCloseTo(2);
     expect(s.amountVsTypical).toBeCloseTo(10);
   });
+
+  // Leaving a field out must never make a request look safer than sending it.
+  it("treats a request with no device as a new device", () => {
+    const s = deriveSignals({ eventType: "login", idempotencyKey: "k", accountId: "acct_1" }, established(), NOW);
+    expect(s.deviceKnown).toBe("unknown");
+    expect(s.newDevice).toBe(true);
+  });
+
+  it.each(["withdrawal", "transfer"] as const)("treats a %s to a payee the account never added as brand new", (eventType) => {
+    const s = deriveSignals({ eventType, idempotencyKey: "k", accountId: "acct_1", amountCents: 50000, payeeId: "bank_never_added", deviceId: "dev_home" }, established(), NOW);
+    expect(s.payeeAgeDays).toBe(0);
+  });
+
+  it("treats a withdrawal that names no payee as going to a brand-new one", () => {
+    const s = deriveSignals({ eventType: "withdrawal", idempotencyKey: "k", accountId: "acct_1", amountCents: 50000, deviceId: "dev_home" }, established(), NOW);
+    expect(s.payeeAgeDays).toBe(0);
+  });
+
+  it("leaves payee age unknown on events that don't move money", () => {
+    // A payee_add's payee is new by definition; that's what NEW_DEVICE_MONEY and the model already weigh.
+    const s = deriveSignals({ eventType: "payee_add", idempotencyKey: "k", accountId: "acct_1", payeeId: "bank_never_added", deviceId: "dev_home" }, established(), NOW);
+    expect(s.payeeAgeDays).toBeNull();
+  });
 });
 
 describe("decide", () => {
@@ -114,6 +137,21 @@ describe("decide", () => {
     expect(d.action).toBe("hold");
     expect(d.reasons).toEqual(expect.arrayContaining(["NEW_DEVICE_MONEY", "PAYEE_UNDER_3D", "CONTACT_CHANGED_7D", "AMOUNT_10X_TYPICAL"]));
     expect(d.score).toBeGreaterThan(0.5);
+  });
+
+  it("holds a routine-sized withdrawal to a payee the account never added", async () => {
+    const d = await decide(
+      { eventType: "withdrawal", idempotencyKey: "k_np", accountId: "acct_1", amountCents: 160000, payeeId: "bank_never_added", deviceId: "dev_home" },
+      deps(established())
+    );
+    expect(d.action).toBe("hold");
+    expect(d.reasons).toContain("PAYEE_UNDER_3D");
+  });
+
+  it("steps up a login that leaves out the device instead of allowing it", async () => {
+    const d = await decide({ eventType: "login", idempotencyKey: "k_nd", accountId: "acct_1" }, deps(established()));
+    expect(d.action).toBe("step_up");
+    expect(d.reasons).toContain("NEW_DEVICE_LOGIN");
   });
 
   it("steps up a new-device login instead of holding it", async () => {
