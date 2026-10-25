@@ -1,0 +1,132 @@
+# CI/CD for a team where a lot of code arrives from AI agents.
+#
+# The shape: every PR, human or agent, goes through the same gates. Nothing
+# deploys from a PR. Deploys happen only from main, through a short-lived
+# OIDC role, into a protected environment.
+#
+# To use the deploy job you need two things in GitHub:
+#   1. A repository variable AWS_DEPLOY_ROLE_ARN: an IAM role that trusts
+#      token.actions.githubusercontent.com for this repo's main branch.
+#   2. An environment named "sandbox" (Settings > Environments) with a required
+#      reviewer, so a merge to main still needs a human to click deploy.
+
+name: ci
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: typecheck, test, synth, policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # `npm ci` honors the lockfile exactly. A hallucinated or typo-squatted
+      # dependency can't slip in without changing the lockfile in the diff.
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      # Synth runs cdk-nag. A finding without an explained suppression fails here,
+      # before anything reaches AWS.
+      - run: npm run synth
+      - name: Keep the synthesized template for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: cdk-template
+          path: cdk.out/*.template.json
+          retention-days: 14
+
+  # Dependency changes get their own review: new packages, license changes,
+  # and known vulnerabilities are surfaced on the PR.
+  dependencies:
+    name: dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure
+
+  # Agent-authored PRs must say so. A PR from a bot account, or any PR that
+  # touches the agent's own configuration, needs the label and a CODEOWNERS
+  # review. This is the lid on the firehose: the agents can propose as much as
+  # they like, but what they can't do is approve, merge, or quietly rewrite the
+  # rules they run under.
+  agent-policy:
+    name: agent PR policy
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const labels = pr.labels.map((l) => l.name);
+            const isBot = pr.user.type === "Bot" || /\[bot\]$|^copilot|^claude/i.test(pr.user.login);
+            const files = await github.paginate(github.rest.pulls.listFiles, { ...context.repo, pull_number: pr.number });
+            const touchesAgentConfig = files.some((f) => /^(CLAUDE\.md|AGENTS\.md|\.github\/|\.claude\/)/.test(f.filename));
+            const touchesRules = files.some((f) => f.filename === "src/core/rules.json");
+            const problems = [];
+            if (isBot && !labels.includes("ai-generated")) problems.push("PRs opened by an agent must carry the `ai-generated` label.");
+            if (touchesAgentConfig && !labels.includes("agent-config-change")) problems.push("Changes to agent or CI configuration need the `agent-config-change` label and a CODEOWNERS review.");
+            if (touchesRules && !labels.includes("rule-change")) problems.push("Changes to src/core/rules.json need the `rule-change` label: rules are policy, and policy gets a fraud-strategy reviewer.");
+            const changed = pr.additions + pr.deletions;
+            if (changed > 400 && !labels.includes("large-change")) problems.push(`This PR changes ${changed} lines. Keep PRs under 400 lines, or add the \`large-change\` label with a justification in the description.`);
+            if (problems.length) core.setFailed(problems.join("\n"));
+            else core.info("Agent PR policy satisfied.");
+
+  # Deploys only from main, only after the gates above, only with a human
+  # approving the environment. The role is assumed through OIDC: no long-lived
+# AWS keys exist anywhere in GitHub.
+  deploy-sandbox:
+    name: deploy to sandbox
+    needs: [verify]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_DEPLOY_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    environment: sandbox
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      # Show the change before making it. In a regulated shop this diff is
+      # what the change ticket attaches.
+      - run: npx cdk diff --context env=sandbox
+      - run: npx cdk deploy --context env=sandbox --require-approval never --outputs-file cdk-outputs.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cdk-outputs
+          path: cdk-outputs.json

@@ -1,0 +1,20 @@
+# Who must review what. GitHub enforces this when branch protection has
+# "Require review from Code Owners" on. Replace the handles with real teams.
+
+# Fraud rules are policy, not just code.
+/src/core/rules.json        @meridian/fraud-strategy @meridian/fraud-engineering
+
+# The decision path touches money.
+/src/core/                  @meridian/fraud-engineering
+/src/handlers/decide.ts     @meridian/fraud-engineering
+
+# Infrastructure and the pipeline itself.
+/lib/                       @meridian/fraud-engineering @meridian/platform
+/bin/                       @meridian/fraud-engineering @meridian/platform
+/.github/                   @meridian/platform
+
+# The rules the agents run under. An agent must never be able to loosen these
+# without a person noticing.
+/CLAUDE.md                  @meridian/fraud-engineering
+/AGENTS.md                  @meridian/fraud-engineering
+/.claude/                   @meridian/fraud-engineering

@@ -1,0 +1,87 @@
+{
+  "version": "2026-10-21.1",
+  "rules": [
+    {
+      "id": "NEW_DEVICE_LOGIN",
+      "description": "Login from a device this account has never used. Cheap to challenge, expensive to miss.",
+      "eventTypes": ["login"],
+      "field": "newDevice",
+      "op": "eq",
+      "value": true,
+      "action": "step_up"
+    },
+    {
+      "id": "LOGIN_VELOCITY",
+      "description": "Five or more failed logins in the last hour looks like credential stuffing or guessing.",
+      "eventTypes": ["login"],
+      "field": "failedLoginsLastHour",
+      "op": "gte",
+      "value": 5,
+      "action": "block"
+    },
+    {
+      "id": "NEW_DEVICE_MONEY",
+      "description": "Money movement from a device we've never seen gets a challenge.",
+      "eventTypes": ["withdrawal", "transfer", "payee_add", "contact_change"],
+      "field": "newDevice",
+      "op": "eq",
+      "value": true,
+      "action": "step_up"
+    },
+    {
+      "id": "PAYEE_UNDER_3D",
+      "description": "Withdrawal to a bank account added in the last three days. The classic takeover cash-out.",
+      "eventTypes": ["withdrawal", "transfer"],
+      "field": "payeeAgeDays",
+      "op": "lt",
+      "value": 3,
+      "action": "hold"
+    },
+    {
+      "id": "CONTACT_CHANGED_7D",
+      "description": "Contact info changed in the last week, so alerts may be going to an attacker.",
+      "eventTypes": ["withdrawal", "transfer", "payee_add"],
+      "field": "contactChangedDays",
+      "op": "lt",
+      "value": 7,
+      "action": "step_up"
+    },
+    {
+      "id": "AMOUNT_10X_TYPICAL",
+      "description": "Amount is ten times this client's usual withdrawal.",
+      "eventTypes": ["withdrawal", "transfer"],
+      "field": "amountVsTypical",
+      "op": "gt",
+      "value": 10,
+      "action": "hold"
+    },
+    {
+      "id": "LARGE_AMOUNT",
+      "description": "Any single withdrawal over $250,000 is reviewed regardless of history.",
+      "eventTypes": ["withdrawal", "transfer"],
+      "field": "amountCents",
+      "op": "gt",
+      "value": 25000000,
+      "action": "hold"
+    },
+    {
+      "id": "SANCTIONED_GEO",
+      "description": "Request from a country we never serve.",
+      "eventTypes": [],
+      "field": "ipCountry",
+      "op": "in",
+      "value": ["KP", "IR", "SY", "CU"],
+      "action": "block"
+    },
+    {
+      "id": "SHADOW_NEW_ACCOUNT_LARGE",
+      "description": "Shadow mode: accounts under 30 days old moving over $10,000. Logged, not enforced, until we see its hit rate.",
+      "eventTypes": ["withdrawal", "transfer"],
+      "field": "accountAgeDays",
+      "op": "lt",
+      "value": 30,
+      "action": "hold",
+      "shadow": true
+    }
+  ]
+}
