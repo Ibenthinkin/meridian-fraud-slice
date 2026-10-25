@@ -21,6 +21,7 @@ This is the fraud decisioning slice for Meridian Investments, a fictitious firm.
 8. Don't change files under `.github/`, `CLAUDE.md`, `AGENTS.md`, or `.claude/` in the same PR as a feature. Those need the `agent-config-change` label and a separate review.
 9. Keep PRs small and single-purpose. One rule, one handler, one construct. A reviewer should be able to read the whole diff in ten minutes.
 10. If you are an agent: say so in the PR description, list the commands you ran and their results, and never mark a PR ready for review or approve one.
+11. Planning notes for this project are private and live outside this repo. Don't create design docs, study notes, or interview prep here. This repo holds code, `docs/` (technical notes only), and the README.
 
 ## Useful commands
 
@@ -29,3 +30,12 @@ This is the fraud decisioning slice for Meridian Investments, a fictitious firm.
 - `npm run synth`: CloudFormation template plus cdk-nag findings in `cdk.out/`
 - `npm run diff`: what a deploy would change in the target account
 - `npm run deploy` / `npm run destroy`: sandbox only; see README for cost notes
+
+## Running log
+
+`log.md` at the repo root is the running log. It's gitignored on purpose: it's a local file that the maintainer's notes system reads, not part of the published repo. Every session that does work here adds an entry at the **top** (newest first, under the latest `## YYYY-MM` header; add a new header when the month changes):
+
+- [[MM-DD-YY ddd]] - concise description of what was done and why
+  _Session spend: …_
+
+The session-spend line comes from `python3 ~/.claude/scripts/session-spend.py --session <session-uuid>`. Paste its output exactly; if the script fails, leave the line out. Commit messages complement the log; they don't replace it.

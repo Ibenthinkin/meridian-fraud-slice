@@ -4,3 +4,4 @@ cdk-outputs.json
 cdk.context.json
 *.js.map
 .DS_Store
+log.md
