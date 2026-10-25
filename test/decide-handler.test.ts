@@ -13,8 +13,10 @@ const KEY_ATTR: Record<string, string> = { features: "accountId", decisions: "de
 /** In-memory DynamoDB: just the Get, conditional Put, and SET-only Update the handler uses. */
 class FakeDynamo {
   readonly tables = new Map<string, Map<string, Record<string, unknown>>>();
+  /** Runs once, just before the next conditional Put: a concurrent writer landing between our Get and our Put. */
+  beforeConditionalPut?: () => void;
 
-  private table(name: string) {
+  table(name: string) {
     if (!this.tables.has(name)) this.tables.set(name, new Map());
     return this.tables.get(name)!;
   }
@@ -27,6 +29,11 @@ class FakeDynamo {
     if (cmd instanceof PutCommand) {
       const { TableName, Item, ConditionExpression } = cmd.input;
       const key = String(Item![KEY_ATTR[TableName!]]);
+      if (ConditionExpression) {
+        const racer = this.beforeConditionalPut;
+        this.beforeConditionalPut = undefined;
+        racer?.();
+      }
       if (ConditionExpression?.startsWith("attribute_not_exists") && this.table(TableName!).has(key)) {
         throw Object.assign(new Error("conditional check failed"), { name: "ConditionalCheckFailedException" });
       }
@@ -114,5 +121,31 @@ describe("decide handler: every decision reaches the bus", () => {
     await call();
     await call(HOLD_BODY, "req_2");
     expect(bus.accepted).toHaveLength(1);
+  });
+});
+
+describe("decide handler: losing a race for the same key", () => {
+  // Record what a concurrent winner left behind (claimed the key, publish
+  // failed), then replay it into the table between our Get and our Put.
+  async function winnerLeftUnpublished(): Promise<Record<string, unknown>> {
+    bus.outcomes = ["throw"];
+    await expect(call()).rejects.toThrow();
+    const record = ddb.table("idempotency").get("idem_1")!;
+    ddb.table("idempotency").delete("idem_1");
+    ddb.beforeConditionalPut = () => ddb.table("idempotency").set("idem_1", structuredClone(record));
+    return record;
+  }
+
+  it("publishes the winner's decision when the winner never did", async () => {
+    const record = await winnerLeftUnpublished();
+    const res = await call(HOLD_BODY, "req_2");
+    expect(JSON.parse(res.body!)).toMatchObject({ action: "hold", replayed: true });
+    expect(bus.accepted).toEqual([expect.objectContaining({ decisionId: (record.decision as { decisionId: string }).decisionId })]);
+  });
+
+  it("rejects a different request under the same key instead of returning the winner's answer", async () => {
+    await winnerLeftUnpublished();
+    const res = await call(JSON.stringify({ ...JSON.parse(HOLD_BODY), ipCountry: "KP" }), "req_2");
+    expect(res.statusCode).toBe(409);
   });
 });

@@ -77,6 +77,22 @@ export function createHandler({ ddb, bus }: Clients) {
     );
   }
 
+  // Every path that answers from a stored record goes through here: the
+  // straight replay and the race loser. Both must reject a different request
+  // and both must finish a publish the first attempt didn't.
+  async function replay(item: Record<string, unknown>, req: DecisionRequest, requestId: string): Promise<APIGatewayProxyResultV2> {
+    if (item.requestHash !== requestFingerprint(req)) {
+      return json(409, { error: "idempotency key reused with a different request", requestId });
+    }
+    // The first attempt decided but never got the event onto the bus (it threw
+    // after claiming the key). Publish now; cases are keyed on decisionId, so
+    // a duplicate can't open a second one.
+    if (item.published !== true && item.decision) {
+      await publish(item.decision as Decision, req.idempotencyKey);
+    }
+    return json(200, { ...(item.response as object), replayed: true });
+  }
+
   return async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
     const requestId = event.requestContext.requestId;
     const parsed = parseRequest(event.body);
@@ -85,18 +101,7 @@ export function createHandler({ ddb, bus }: Clients) {
 
     // 1. Idempotency: the same key returns the same decision, never a second one.
     const prior = await ddb.send(new GetCommand({ TableName: IDEMPOTENCY_TABLE, Key: { idempotencyKey: req.idempotencyKey } }));
-    if (prior.Item) {
-      if (prior.Item.requestHash !== requestFingerprint(req)) {
-        return json(409, { error: "idempotency key reused with a different request", requestId });
-      }
-      // The first attempt decided but never got the event onto the bus (it threw
-      // after claiming the key). Publish now; cases are keyed on decisionId, so
-      // a duplicate can't open a second one.
-      if (prior.Item.published !== true && prior.Item.decision) {
-        await publish(prior.Item.decision as Decision, req.idempotencyKey);
-      }
-      return json(200, { ...prior.Item.response, replayed: true });
-    }
+    if (prior.Item) return replay(prior.Item, req, requestId);
 
     // 2. Decide.
     const decision = await decide(req, {
@@ -139,7 +144,7 @@ export function createHandler({ ddb, bus }: Clients) {
       // Lost a race with a concurrent request carrying the same key: return the winner's answer.
       if ((err as { name?: string }).name === "ConditionalCheckFailedException") {
         const winner = await ddb.send(new GetCommand({ TableName: IDEMPOTENCY_TABLE, Key: { idempotencyKey: req.idempotencyKey } }));
-        if (winner.Item) return json(200, { ...winner.Item.response, replayed: true });
+        if (winner.Item) return replay(winner.Item, req, requestId);
       }
       throw err;
     }
