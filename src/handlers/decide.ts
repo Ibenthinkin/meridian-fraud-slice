@@ -12,6 +12,7 @@ import {
   SIGNAL_FIELDS,
   decide,
   heuristicModel,
+  requestFingerprint,
   validateRuleSet,
   type AccountFeatures,
   type DecisionRequest,
@@ -49,7 +50,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   // 1. Idempotency: the same key returns the same decision, never a second one.
   const prior = await ddb.send(new GetCommand({ TableName: IDEMPOTENCY_TABLE, Key: { idempotencyKey: req.idempotencyKey } }));
   if (prior.Item) {
-    if (prior.Item.requestHash !== requestHash(req)) {
+    if (prior.Item.requestHash !== requestFingerprint(req)) {
       return json(409, { error: "idempotency key reused with a different request", requestId });
     }
     return json(200, { ...prior.Item.response, replayed: true });
@@ -83,7 +84,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
         TableName: IDEMPOTENCY_TABLE,
         Item: {
           idempotencyKey: req.idempotencyKey,
-          requestHash: requestHash(req),
+          requestHash: requestFingerprint(req),
           response,
           expiresAt: Math.floor(Date.now() / 1000) + IDEMPOTENCY_TTL_SECONDS,
         },
@@ -152,10 +153,6 @@ function parseRequest(body: string | undefined): { value: DecisionRequest } | { 
       sessionId: raw.sessionId as string | undefined,
     },
   };
-}
-
-function requestHash(req: DecisionRequest): string {
-  return JSON.stringify([req.eventType, req.accountId, req.amountCents ?? null, req.payeeId ?? null, req.deviceId ?? null]);
 }
 
 function json(statusCode: number, body: unknown): APIGatewayProxyResultV2 {

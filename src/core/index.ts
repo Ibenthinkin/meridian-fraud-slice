@@ -4,3 +4,4 @@ export * from "./rules.js";
 export * from "./model.js";
 export * from "./decide.js";
 export * from "./features.js";
+export * from "./idempotency.js";

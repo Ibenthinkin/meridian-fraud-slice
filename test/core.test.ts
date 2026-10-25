@@ -9,9 +9,11 @@ import {
   evaluateRules,
   heuristicModel,
   mostSevere,
+  requestFingerprint,
   validateRuleSet,
   type AccountFeatures,
   type DecisionDeps,
+  type DecisionRequest,
   type RuleSet,
 } from "../src/core/index.js";
 import ruleSetJson from "../src/core/rules.json" with { type: "json" };
@@ -206,5 +208,45 @@ describe("feature ingestion", () => {
     expect(f2.failedLoginTimestamps).toEqual([2 * 60 * 60 * 1000]);
     expect(base.failedLoginTimestamps).toEqual([]);
     expect(f1.failedLoginTimestamps).toEqual([0]);
+  });
+});
+
+describe("idempotency fingerprint", () => {
+  const original: DecisionRequest = {
+    eventType: "withdrawal",
+    idempotencyKey: "idem_1",
+    accountId: "acct_1",
+    amountCents: 195000,
+    payeeId: "bank_old",
+    deviceId: "dev_home",
+    ipCountry: "US",
+    sessionId: "sess_1",
+    occurredAt: "2026-10-21T15:00:00Z",
+  };
+
+  // A replay must not return a stored answer for a request the rules would judge
+  // differently. Reusing a key with ipCountry "KP" must not replay an "allow".
+  it.each([
+    ["eventType", "transfer"],
+    ["accountId", "acct_2"],
+    ["amountCents", 2400000],
+    ["payeeId", "bank_new"],
+    ["deviceId", "dev_new"],
+    ["ipCountry", "KP"],
+    ["sessionId", "sess_2"],
+    ["occurredAt", "2026-10-22T15:00:00Z"],
+  ] as const)("changes when %s changes", (field, value) => {
+    expect(requestFingerprint({ ...original, [field]: value })).not.toBe(requestFingerprint(original));
+  });
+
+  it("ignores the idempotency key itself and the order fields arrive in", () => {
+    const { idempotencyKey: _key, ...rest } = original;
+    const reordered = Object.fromEntries(Object.entries(rest).reverse()) as Omit<DecisionRequest, "idempotencyKey">;
+    expect(requestFingerprint({ ...reordered, idempotencyKey: "idem_other" })).toBe(requestFingerprint(original));
+  });
+
+  it("treats an absent optional field the same as an undefined one", () => {
+    const { payeeId: _payee, ...withoutPayee } = original;
+    expect(requestFingerprint(withoutPayee)).toBe(requestFingerprint({ ...original, payeeId: undefined }));
   });
 });
