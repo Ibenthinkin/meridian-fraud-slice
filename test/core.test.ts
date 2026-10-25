@@ -105,6 +105,19 @@ describe("signals", () => {
     expect(s.payeeAgeDays).toBe(0);
   });
 
+  // payeeAddedAt is a plain object, so these names resolve to Object.prototype
+  // members, not payees. Their "age" must not come out as NaN, which no rule fires on.
+  it.each(["constructor", "toString", "__proto__", "hasOwnProperty"])("treats a payeeId of %s as a payee with no history", (payeeId) => {
+    const s = deriveSignals({ eventType: "withdrawal", idempotencyKey: "k", accountId: "acct_1", amountCents: 50000, payeeId, deviceId: "dev_home" }, established(), NOW);
+    expect(s.payeeAgeDays).toBe(0);
+  });
+
+  it("treats a corrupt stored payee timestamp as a payee with no history", () => {
+    const f = established({ payeeAddedAt: { bank_old: "yesterday" as unknown as number } });
+    const s = deriveSignals({ eventType: "withdrawal", idempotencyKey: "k", accountId: "acct_1", amountCents: 50000, payeeId: "bank_old", deviceId: "dev_home" }, f, NOW);
+    expect(s.payeeAgeDays).toBe(0);
+  });
+
   it("treats a withdrawal that names no payee as going to a brand-new one", () => {
     const s = deriveSignals({ eventType: "withdrawal", idempotencyKey: "k", accountId: "acct_1", amountCents: 50000, deviceId: "dev_home" }, established(), NOW);
     expect(s.payeeAgeDays).toBe(0);

@@ -43,7 +43,11 @@ export function deriveSignals(
   // going to one added just now. Left as null, the age rules would skip it and
   // an unknown payee would look safer than one added yesterday.
   const movesMoney = req.eventType === "withdrawal" || req.eventType === "transfer";
-  const payeeAddedAt = req.payeeId ? features.payeeAddedAt[req.payeeId] : undefined;
+  // Own keys only: payeeId comes from the caller, and on a plain object a name
+  // like "constructor" would otherwise resolve to Object.prototype and give NaN.
+  const stored =
+    req.payeeId && Object.hasOwn(features.payeeAddedAt, req.payeeId) ? features.payeeAddedAt[req.payeeId] : undefined;
+  const payeeAddedAt = typeof stored === "number" && Number.isFinite(stored) ? stored : undefined;
   const payeeAgeDays =
     payeeAddedAt !== undefined ? (now - payeeAddedAt) / DAY : movesMoney ? 0 : null;
 
